@@ -7,4 +7,5 @@ __pycache__/
 *.pdf
 *.txt
 yield_fastY2.py
-SAYCOU_fastY2.py
+SAYCOU_calculator.py
+!SAYCOU_fastY2.py
