@@ -10,6 +10,7 @@ https://ipnp.cz/valenta/index_en.html#page=yield_en.html
 
 - `SAYCOU_calculator.py` : compute script
 - `SAYCOU_plot.py` : plotting script
+- `Mn55_xs_ENDFBVIII0_myCustomGrid.csv` : example input
 
 ## Usage
 
