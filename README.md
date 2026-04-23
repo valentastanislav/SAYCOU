@@ -1,4 +1,4 @@
-# SAYCOU calculator
+# SAYCOU Semi-Analytical Yield Calculator fOr Uniform samples
 
 Python code for estimating neutron capture yield including direct capture, one-scatter contribution, two-scatter contribution, and an approximate higher-order tail.
 
