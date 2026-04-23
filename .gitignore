@@ -6,5 +6,6 @@ __pycache__/
 *.png
 *.pdf
 *.txt
+*.code-workspace
 yield_fastY2.py
 SAYCOU_fastY2.py
