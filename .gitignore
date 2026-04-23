@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+*.swp
+*.png
+*.pdf
+*.txt
+yield_fastY2.py
+SAYCOU_fastY2.py
