@@ -6,7 +6,6 @@ import numpy as np
 import re
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from numba import njit
 
 
@@ -271,12 +270,10 @@ def calculate_y2_and_y3plus_single_energy(
     nphi1=6,
     ns1=6,
     nmu2=6,
-    nphi2=6,
-    nmu3=6
+    nphi2=6
 ):
     """
-    Deterministic estimate of strict Y2 and approximate Y3plus,
-    with full mu3 sampling for the Y3+ tail.
+    Deterministic estimate of strict Y2 and approximate Y3plus.
     """
     sample_radius_mm = diameter_mm / 2.0
     beam_radius_mm = beam_diameter_mm / 2.0
@@ -295,7 +292,6 @@ def calculate_y2_and_y3plus_single_energy(
     dphi1 = 2.0 * math.pi / nphi1
     dmu2 = 2.0 / nmu2
     dphi2 = 2.0 * math.pi / nphi2
-    dmu3 = 2.0 / nmu3
 
     total_y2 = 0.0
     total_y3plus = 0.0
@@ -362,16 +358,12 @@ def calculate_y2_and_y3plus_single_energy(
                             Sigma_el_2  = n_areal * sigma_el_2  / thickness_mm
                             Sigma_cap_2 = n_areal * sigma_cap_2 / thickness_mm
 
-                            sigma_cap_3_avg = 0.0
-                            for imu3 in range(nmu3):
-                                mu3 = -1.0 + (imu3 + 0.5) * dmu3
-                                w_mu3 = 0.5 * dmu3
-                                E3 = scattered_energy(E2, mu3, A)
-                                _, _, sigma_cap_3 = get_nearest_xs(
-                                    E3, energy_grid, sigma_tot_grid, sigma_el_grid, sigma_cap_grid
-                                )
-                                sigma_cap_3_avg += w_mu3 * sigma_cap_3
-                            Sigma_cap_3_avg = n_areal * sigma_cap_3_avg / thickness_mm
+                            # one cheap representative extra energy shift for Y3+ tail
+                            E3_eff = scattered_energy(E2, 0.0, A)
+                            _, _, sigma_cap_3_eff = get_nearest_xs(
+                                E3_eff, energy_grid, sigma_tot_grid, sigma_el_grid, sigma_cap_grid
+                            )
+                            Sigma_cap_3_eff = n_areal * sigma_cap_3_eff / thickness_mm
 
                             for iphi2 in range(nphi2):
                                 phi2 = (iphi2 + 0.5) * dphi2
@@ -392,7 +384,7 @@ def calculate_y2_and_y3plus_single_energy(
                                     p_scat_next = 0.0
 
                                 p_y3plus = p_scat_next * (
-                                    1.0 - math.exp(-Sigma_cap_3_avg * L2_mm)
+                                    1.0 - math.exp(-Sigma_cap_3_eff * L2_mm)
                                 )
 
                                 weight = prefactor * w_mu2 * w_phi2
@@ -401,55 +393,6 @@ def calculate_y2_and_y3plus_single_energy(
 
     return total_y2, total_y3plus
 
-
-
-def _compute_chunk(args):
-    (
-        start_idx, end_idx, energy_sel, A, energy, sigma_tot, sigma_el, sigma_cap,
-        n_areal, thickness_mm, diameter_mm, beam_diameter_mm, y1_grid, y2_grid
-    ) = args
-
-    nloc = end_idx - start_idx
-    y1_chunk = np.empty(nloc, dtype=np.float64)
-    y2_chunk = np.empty(nloc, dtype=np.float64)
-    y3plus_chunk = np.empty(nloc, dtype=np.float64)
-
-    e0 = energy_sel[start_idx]
-    _ = calculate_y1_single_energy(
-        e0, A, energy, sigma_tot, sigma_el, sigma_cap,
-        n_areal, thickness_mm, diameter_mm, beam_diameter_mm,
-        y1_grid[0], y1_grid[1], y1_grid[2], y1_grid[3]
-    )
-    _ = calculate_y2_and_y3plus_single_energy(
-        e0, A, energy, sigma_tot, sigma_el, sigma_cap,
-        n_areal, thickness_mm, diameter_mm, beam_diameter_mm,
-        y2_grid[0], y2_grid[1], y2_grid[2], y2_grid[3], y2_grid[4], y2_grid[5], y2_grid[6]
-    )
-
-    for j in range(nloc):
-        E_in = energy_sel[start_idx + j]
-        y1_chunk[j] = calculate_y1_single_energy(
-            E_in, A, energy, sigma_tot, sigma_el, sigma_cap,
-            n_areal, thickness_mm, diameter_mm, beam_diameter_mm,
-            y1_grid[0], y1_grid[1], y1_grid[2], y1_grid[3]
-        )
-        y2_chunk[j], y3plus_chunk[j] = calculate_y2_and_y3plus_single_energy(
-            E_in, A, energy, sigma_tot, sigma_el, sigma_cap,
-            n_areal, thickness_mm, diameter_mm, beam_diameter_mm,
-            y2_grid[0], y2_grid[1], y2_grid[2], y2_grid[3], y2_grid[4], y2_grid[5], y2_grid[6]
-        )
-
-    return start_idx, end_idx, y1_chunk, y2_chunk, y3plus_chunk
-
-
-def _build_chunks(npts, chunk_size):
-    chunks = []
-    start = 0
-    while start < npts:
-        end = min(start + chunk_size, npts)
-        chunks.append((start, end))
-        start = end
-    return chunks
 
 def read_xs_file(filename):
     """
@@ -553,9 +496,9 @@ def main():
     npts = len(energy_sel)
 
     y1_grid = (6, 6, 8, 8)
-    y2_grid = (4, 4, 6, 6, 6, 6, 6, 6)
+    y2_grid = (4, 4, 6, 6, 6, 6, 6)
 
-    # warm-up JIT compilation in the main process before timing
+    # warm-up JIT compilation outside timing
     _ = calculate_y1_single_energy(
         energy_sel[0], A, energy, sigma_tot, sigma_el, sigma_cap,
         n_areal, thickness_mm, diameter_mm, beam_diameter_mm,
@@ -564,44 +507,36 @@ def main():
     _ = calculate_y2_and_y3plus_single_energy(
         energy_sel[0], A, energy, sigma_tot, sigma_el, sigma_cap,
         n_areal, thickness_mm, diameter_mm, beam_diameter_mm,
-        y2_grid[0], y2_grid[1], y2_grid[2], y2_grid[3], y2_grid[4], y2_grid[5], y2_grid[6], y2_grid[7]
+        y2_grid[0], y2_grid[1], y2_grid[2], y2_grid[3], y2_grid[4], y2_grid[5], y2_grid[6]
     )
 
     t0 = time.perf_counter()
 
-    nworkers = max(1, os.cpu_count() - 1)
-    chunk_size = max(1, npts // (4 * nworkers))
-    chunks = _build_chunks(npts, chunk_size)
-    tasks = [
-        (
-            start_idx, end_idx, energy_sel, A, energy, sigma_tot, sigma_el, sigma_cap,
-            n_areal, thickness_mm, diameter_mm, beam_diameter_mm, y1_grid, y2_grid
+    for i, E_in in enumerate(energy_sel):
+        y1[i] = calculate_y1_single_energy(
+            E_in, A, energy, sigma_tot, sigma_el, sigma_cap,
+            n_areal, thickness_mm, diameter_mm, beam_diameter_mm,
+            y1_grid[0], y1_grid[1], y1_grid[2], y1_grid[3]
         )
-        for start_idx, end_idx in chunks
-    ]
+        y2[i], y3plus[i] = calculate_y2_and_y3plus_single_energy(
+            E_in, A, energy, sigma_tot, sigma_el, sigma_cap,
+            n_areal, thickness_mm, diameter_mm, beam_diameter_mm,
+            y2_grid[0], y2_grid[1], y2_grid[2], y2_grid[3], y2_grid[4], y2_grid[5], y2_grid[6]
+        )
 
-    done = 0
-    with ProcessPoolExecutor(max_workers=nworkers) as executor:
-        futures = [executor.submit(_compute_chunk, task) for task in tasks]
+        done = i + 1
+        elapsed = time.perf_counter() - t0
+        avg = elapsed / done
+        remaining = avg * (npts - done)
 
-        for future in as_completed(futures):
-            start_idx, end_idx, y1_chunk, y2_chunk, y3plus_chunk = future.result()
-            y1[start_idx:end_idx] = y1_chunk
-            y2[start_idx:end_idx] = y2_chunk
-            y3plus[start_idx:end_idx] = y3plus_chunk
+        print(
+            f"\r{done}/{npts}  "
+            f"elapsed = {elapsed:.1f} s  "
+            f"ETA = {remaining:.1f} s",
+            end="",
+            flush=True
+        )
 
-            done += (end_idx - start_idx)
-            elapsed = time.perf_counter() - t0
-            avg = elapsed / done
-            remaining = avg * (npts - done)
-
-            print(
-                f"\r{done}/{npts}  "
-                f"elapsed = {elapsed:.1f} s  "
-                f"ETA = {remaining:.1f} s",
-                end="",
-                flush=True
-            )
     print()
     t1 = time.perf_counter()
     print(f"Total calculation time: {t1 - t0:.3f} s")
@@ -624,8 +559,7 @@ def main():
         f"beam_diameter_mm = {beam_diameter_mm:.8e}",
         f"energy_min_eV = {energy_sel.min():.8e}",
         f"energy_max_eV = {energy_sel.max():.8e}",
-        f"nworkers = {nworkers} (Numba chunked parallel)",
-        f"chunk_size = {chunk_size}",
+        "nworkers = 1 (Numba serial)",
         f"y1_grid = {y1_grid}",
         f"y2_grid = {y2_grid}",
         f"total_calculation_time_s = {t1 - t0:.6f}",
